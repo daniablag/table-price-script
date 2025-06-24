@@ -133,15 +133,25 @@ add_action('wp_footer', function () {
         }
 
         function recalcSimpleProductPrice(scope) {
-            const el = scope.querySelector('.product .price .woocommerce-Price-amount.amount');
-            const table = scope.querySelector('table.tiered-pricing-table[data-price-rules]');
-            if (!el || !table) return;
-            const rate = getRate(), curr = getCurr(), symbol = getSymbol(curr);
-            const qty = parseInt(scope.querySelector('.cart input.qty')?.value || 1, 10);
-            const base = getBasePriceForQty(table, qty);
-            const display = curr === 'UAH' ? base * rate : base;
-            el.innerHTML = `${fmt(display)}&nbsp;<span class="woocommerce-Price-currencySymbol">${symbol}</span>`;
-        }
+    const el = scope.querySelector('.product .price .woocommerce-Price-amount.amount');
+    const table = scope.querySelector('table.tiered-pricing-table[data-price-rules]');
+    if (!el || !table) return;
+
+    // Удаляем диапазон, если он был вставлен
+    if (el.classList.contains('price-range-inserted')) {
+        el.classList.remove('price-range-inserted');
+    }
+    // Если кто-то другой вставил диапазон — чистим его
+    if (el.innerText.includes('–')) {
+        // Можно заменить на новую цену ниже, не чистить вручную, если ниже будет присвоение
+    }
+
+    const rate = getRate(), curr = getCurr(), symbol = getSymbol(curr);
+    const qty = parseInt(scope.querySelector('.cart input.qty')?.value || 1, 10);
+    const base = getBasePriceForQty(table, qty);
+    const display = curr === 'UAH' ? base * rate : base;
+    el.innerHTML = `${fmt(display)}&nbsp;<span class="woocommerce-Price-currencySymbol">${symbol}</span>`;
+}
 
         function recalcTieredDynamicBlock(scope) {
             const rate = getRate(), curr = getCurr(), symbol = getSymbol(curr);
@@ -280,42 +290,67 @@ add_action('wp_footer', function () {
 
         // --- ВЫЗОВЫ ---
         function runAll() {
-            recalcTiered(wrapper);
-            recalcVariation(wrapper);
-            recalcStrikethrough(wrapper);
-            recalcDynamic(wrapper);
-            recalcSimpleProductPrice(wrapper);
-            recalcTieredDynamicBlock(wrapper);
-            recalcTieredSummary(wrapper);
+    recalcTiered(wrapper);
+    recalcVariation(wrapper);
+    recalcStrikethrough(wrapper);
+    recalcDynamic(wrapper);
+    recalcSimpleProductPrice(wrapper);
+    recalcTieredDynamicBlock(wrapper);
+    recalcTieredSummary(wrapper);
 
-            // Новое: если нет скидочных правил — рисуем summary
-            if (!window.tiered_price_range) {
-                renderNoTierSummary(wrapper);
-                updateNoTierSummary(wrapper);
-            } else {
-                // Если были скидки, а теперь их нет — удалить старую таблицу
-                const old = wrapper.querySelector('.no-tiers-summary-table');
-                if (old) old.remove();
+    // Новое: если нет скидочных правил — рисуем summary
+    if (!window.tiered_price_range) {
+        renderNoTierSummary(wrapper);
+        updateNoTierSummary(wrapper);
+    } else {
+        // Если были скидки, а теперь их нет — удалить старую таблицу
+        const old = wrapper.querySelector('.no-tiers-summary-table');
+        if (old) old.remove();
+    }
+
+    // Диапазон цен до выбора вариации
+    (function insertInitialRange() {
+        // Вставлять диапазон только для variable товаров
+        if (!window.tiered_price_range) return;
+        // Определяем variable товар (вариативный)
+        const isVariable = !!wrapper.querySelector('.variations_form');
+        if (!isVariable) return; // Только для вариативных товаров
+
+        // Если уже выбран вариант — не показывать диапазон
+        if (wrapper.querySelector('.woocommerce-variation-price')) return;
+
+        const priceBlock = wrapper.querySelector('.price');
+        const amount = priceBlock?.querySelector('.woocommerce-Price-amount.amount');
+        if (!priceBlock || !amount || amount.classList.contains('price-range-inserted')) return;
+
+        const rate = getRate();
+        const symbol = getSymbol(getCurr());
+        const min = fmt(window.tiered_price_range.min * rate);
+        const max = fmt(window.tiered_price_range.max * rate);
+
+        amount.innerHTML = `${min} – ${max}&nbsp;<span class="woocommerce-Price-currencySymbol">${symbol}</span>`;
+        amount.classList.add('price-range-inserted');
+    })();
+
+    // --- Чистим диапазон (range), если он вдруг остался у simple-product ---
+    (function clearRangeForSimple() {
+        if (!window.tiered_price_range) return;
+        const isVariable = !!wrapper.querySelector('.variations_form');
+        if (!isVariable) {
+            // Это simple-product, убираем price-range-inserted если вдруг осталась
+            const simpleAmount = wrapper.querySelector('.product .price .woocommerce-Price-amount.amount.price-range-inserted');
+            if (simpleAmount) {
+                simpleAmount.classList.remove('price-range-inserted');
+                // Можно также заменить innerHTML на корректную цену (это уже делает recalcSimpleProductPrice)
             }
-
-            // Диапазон цен до выбора вариации
-            (function insertInitialRange() {
-                if (!window.tiered_price_range) return;
-                if (wrapper.querySelector('.woocommerce-variation-price')) return;
-
-                const priceBlock = wrapper.querySelector('.price');
-                const amount = priceBlock?.querySelector('.woocommerce-Price-amount.amount');
-                if (!priceBlock || !amount || priceBlock.querySelector('.price-range-inserted')) return;
-
-                const rate = getRate();
-                const symbol = getSymbol(getCurr());
-                const min = fmt(window.tiered_price_range.min * rate);
-                const max = fmt(window.tiered_price_range.max * rate);
-
-                amount.innerHTML = `${min} – ${max}&nbsp;<span class="woocommerce-Price-currencySymbol">${symbol}</span>`;
-                amount.classList.add('price-range-inserted');
-            })();
+            // Также чистим del если вдруг там оказался range
+            const del = wrapper.querySelector('.product .price del .woocommerce-Price-amount.amount.price-range-inserted');
+            if (del) {
+                del.classList.remove('price-range-inserted');
+            }
         }
+    })();
+}
 
         window.addEventListener('load', runAll);
         window.addEventListener('popstate', runAll);
