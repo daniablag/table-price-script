@@ -3,31 +3,29 @@ add_action('wp_footer', function () {
 
     global $product;
 
-     if (!is_object($product) || !class_exists('\TierPricingTable\PriceManager')) return;
+    if (!is_object($product) || !class_exists('\TierPricingTable\PriceManager')) return;
 
     $rule = \TierPricingTable\PriceManager::getPricingRule($product->get_id());
     $rules = $rule ? $rule->getRules() : [];
 
-    if (empty($rules)) return;
+    if (!empty($rules)) {
+        $min = min(array_values($rules));
+        $max = 0;
 
-    $min = min(array_values($rules));
-
-    // Получаем регулярную цену:
-    $max = 0;
-
-    if ($product->is_type('variable')) {
-        foreach ($product->get_children() as $variation_id) {
-            $variation = wc_get_product($variation_id);
-            if (!$variation) continue;
-            $price = (float) $variation->get_regular_price();
-            if ($price > $max) $max = $price;
+        if ($product->is_type('variable')) {
+            foreach ($product->get_children() as $variation_id) {
+                $variation = wc_get_product($variation_id);
+                if (!$variation) continue;
+                $price = (float) $variation->get_regular_price();
+                if ($price > $max) $max = $price;
+            }
+        } else {
+            $max = (float) $product->get_regular_price();
         }
-    } else {
-        $max = (float) $product->get_regular_price();
-    }
 
-    if ($max > 0) {
-        echo "<script>window.tiered_price_range = {min: {$min}, max: {$max}};</script>";
+        if ($max > 0) {
+            echo "<script>window.tiered_price_range = {min: {$min}, max: {$max}};</script>";
+        }
     }
     ?>
     <script>
@@ -37,6 +35,7 @@ add_action('wp_footer', function () {
         const wrapper = document.querySelector('.entry-summary');
         if (!wrapper) return;
 
+        // --- УТИЛИТЫ ---
         function getRate() {
             const el = document.querySelector('.woocs_auto_switcher_link.woocs_curr_curr');
             if (!el) return 1;
@@ -70,10 +69,11 @@ add_action('wp_footer', function () {
             try { rules = JSON.parse(table.dataset.priceRules); } catch {}
             let base = parseFloat(table.dataset.regularPrice.replace(',', '.'));
             Object.keys(rules).map(n => +n).sort((a, b) => a - b)
-              .forEach(th => { if (qty >= th) base = parseFloat(rules[th]); });
+            .forEach(th => { if (qty >= th) base = parseFloat(rules[th]); });
             return base;
         }
 
+        // --- ЛОГИКА TIERED PRICING TABLE ---
         function recalcTiered(scope) {
             const rate = getRate(), curr = getCurr(), symbol = getSymbol(curr);
             scope.querySelectorAll('table.tiered-pricing-table[data-price-rules]').forEach(table => {
@@ -196,6 +196,89 @@ add_action('wp_footer', function () {
             }
         }
 
+        // --- БЛОК ДЛЯ ТОВАРОВ БЕЗ СКИДОК ---
+        function renderNoTierSummary(scope) {
+            if (window.tiered_price_range) return; // Только если нет скидок
+            if (scope.querySelector('.no-tiers-summary-table')) return;
+
+            const qty = parseInt(scope.querySelector('.cart input.qty, .variations_form input.qty')?.value || 1, 10);
+            let price = 0, name = '';
+            const curr = getCurr(), rate = getRate(), symbol = getSymbol(curr);
+
+            // ФАКТИЧЕСКАЯ цена (учитываем ins)
+            let priceEl = scope.querySelector('.product .price ins .woocommerce-Price-amount.amount bdi');
+            if (priceEl) {
+                price = parseFloat(priceEl.textContent.replace(/[^\d.,]/g, '').replace(',', '.'));
+            } else {
+                priceEl = scope.querySelector('.product .price .woocommerce-Price-amount.amount bdi');
+                if (priceEl) price = parseFloat(priceEl.textContent.replace(/[^\d.,]/g, '').replace(',', '.'));
+            }
+
+            const nameEl = scope.querySelector('.product_title, .entry-title');
+            if (nameEl) name = nameEl.textContent.trim();
+
+            const total = price * qty;
+
+            const html = `
+<div class="no-tiers-summary-table" data-product-id="">
+  <h4 style="margin: 10px 0;">ВСЬОГО:</h4>
+  <div class="tiered-pricing-totals tiered-pricing-totals--no-tiers">
+    <div style="display: flex; justify-content: space-between; border-top: 1px dashed #f5f5f5; border-bottom: 1px dashed #f5f5f5; padding: 5px 0;">
+      <div>
+        <span class="no-tiers-summary-qty">${qty}</span>
+        <span style="font-size: .9em;">×</span>
+        <span class="no-tiers-summary-name">${name}</span>
+      </div>
+      <div>
+        <span style="font-size: 1.15em" class="no-tiers-summary-price">
+          <span class="woocommerce-Price-amount amount">${fmt(price)}&nbsp;<span class="woocommerce-Price-currencySymbol">${symbol}</span></span>
+        </span>
+      </div>
+    </div>
+    <div style="display: flex; justify-content: space-between; font-size: 1.3em; margin-top:5px">
+      <div>Загальна Сума</div>
+      <div>
+        <span class="no-tiers-summary-total">
+          <span class="woocommerce-Price-amount amount">${fmt(total)}&nbsp;<span class="woocommerce-Price-currencySymbol">${symbol}</span></span>
+        </span>
+      </div>
+    </div>
+  </div>
+</div>
+`;
+            const afterBlock = scope.querySelector('.cart, .variations_form');
+            if (afterBlock) {
+                afterBlock.insertAdjacentHTML('afterend', html);
+            } else {
+                scope.insertAdjacentHTML('beforeend', html);
+            }
+        }
+
+        function updateNoTierSummary(scope) {
+            if (window.tiered_price_range) return;
+            const table = scope.querySelector('.no-tiers-summary-table');
+            if (!table) return;
+            const qty = parseInt(scope.querySelector('.cart input.qty, .variations_form input.qty')?.value || 1, 10);
+            let price = 0;
+            const curr = getCurr(), rate = getRate(), symbol = getSymbol(curr);
+
+            // ФАКТИЧЕСКАЯ цена (учитываем ins)
+            let priceEl = scope.querySelector('.product .price ins .woocommerce-Price-amount.amount bdi');
+            if (priceEl) {
+                price = parseFloat(priceEl.textContent.replace(/[^\d.,]/g, '').replace(',', '.'));
+            } else {
+                priceEl = scope.querySelector('.product .price .woocommerce-Price-amount.amount bdi');
+                if (priceEl) price = parseFloat(priceEl.textContent.replace(/[^\d.,]/g, '').replace(',', '.'));
+            }
+
+            const total = price * qty;
+
+            table.querySelector('.no-tiers-summary-qty').textContent = qty;
+            table.querySelector('.no-tiers-summary-price .woocommerce-Price-amount.amount').innerHTML = `${fmt(price)}&nbsp;<span class="woocommerce-Price-currencySymbol">${symbol}</span>`;
+            table.querySelector('.no-tiers-summary-total .woocommerce-Price-amount.amount').innerHTML = `${fmt(total)}&nbsp;<span class="woocommerce-Price-currencySymbol">${symbol}</span>`;
+        }
+
+        // --- ВЫЗОВЫ ---
         function runAll() {
             recalcTiered(wrapper);
             recalcVariation(wrapper);
@@ -205,6 +288,17 @@ add_action('wp_footer', function () {
             recalcTieredDynamicBlock(wrapper);
             recalcTieredSummary(wrapper);
 
+            // Новое: если нет скидочных правил — рисуем summary
+            if (!window.tiered_price_range) {
+                renderNoTierSummary(wrapper);
+                updateNoTierSummary(wrapper);
+            } else {
+                // Если были скидки, а теперь их нет — удалить старую таблицу
+                const old = wrapper.querySelector('.no-tiers-summary-table');
+                if (old) old.remove();
+            }
+
+            // Диапазон цен до выбора вариации
             (function insertInitialRange() {
                 if (!window.tiered_price_range) return;
                 if (wrapper.querySelector('.woocommerce-variation-price')) return;
@@ -231,10 +325,11 @@ add_action('wp_footer', function () {
             const $ = jQuery;
             $(document).ajaxComplete(() => setTimeout(runAll, 50));
             $(document.body).on(
-              'found_variation show_variation woocommerce_variation_has_changed change input',
-              '.variations_form input.qty, .cart input.qty',
-              () => setTimeout(runAll, 50)
+                'found_variation show_variation woocommerce_variation_has_changed change input',
+                '.variations_form input.qty, .cart input.qty',
+                () => setTimeout(runAll, 50)
             );
+            $(document.body).on('woocs_current_currency_changed', () => setTimeout(runAll, 100));
         }
     })();
     </script>
